@@ -1,0 +1,29 @@
+# tests/integration/setup is short-lived fixture infrastructure created and
+# destroyed by the integration suites in the caller's own account; it is not a
+# deployable pattern and is excluded from policy scanning.
+skip-path:
+  - tests/integration/setup
+
+# CKV2_AWS_16 is a verified false positive, not accepted risk. It is a
+# Checkov graph check, present in the Checkov 3.3.19 that CI runs but absent
+# from the locally available 3.3.10, so it cannot be reproduced offline; it
+# was verified directly in CI. Scanning this repository's own root passes
+# cleanly (`checkov -d .`: 11 passed, 0 failed), correctly linking
+# aws_dynamodb_table.this/.autoscaled[0] to the aws_appautoscaling_target and
+# aws_appautoscaling_policy resources one level down in module.autoscaling.
+# examples/provisioned-autoscaled reaches the identical table and autoscaling
+# configuration through an extra layer of module nesting
+# (module.table.module.autoscaling, two levels down from the example root)
+# and fails CKV2_AWS_16 on both table variants, even though the example
+# explicitly sets autoscaling and modules/autoscaling registers exactly the
+# scalable target and target-tracking policy the check looks for: Checkov
+# cannot resolve the graph edge across the second module boundary. The real
+# rendered resources are asserted directly in
+# tests/autoscaling.tftest.hcl ("selects_the_autoscaled_variant_and_derives_initial_capacity",
+# "scales_indexes_and_keeps_explicit_capacities") and in
+# modules/autoscaling/tests/autoscaling.tftest.hcl, which is the source of
+# truth for this module's autoscaling posture. Re-run
+# `checkov -d examples/provisioned-autoscaled` yourself before removing this
+# skip.
+skip-check:
+  - CKV2_AWS_16 # DynamoDB Auto Scaling — false positive across the module.table -> module.autoscaling nesting an example introduces; see comment above.

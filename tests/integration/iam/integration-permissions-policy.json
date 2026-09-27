@@ -1,0 +1,49 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "CallerIdentityForTheFixture",
+      "Effect": "Allow",
+      "Action": "sts:GetCallerIdentity",
+      "Resource": "*"
+    },
+    {
+      "Sid": "TablesUnderTest",
+      "Effect": "Allow",
+      "Action": [
+        "dynamodb:CreateTable", "dynamodb:DeleteTable", "dynamodb:DescribeTable", "dynamodb:UpdateTable",
+        "dynamodb:DescribeContinuousBackups", "dynamodb:UpdateContinuousBackups",
+        "dynamodb:DescribeTimeToLive", "dynamodb:UpdateTimeToLive",
+        "dynamodb:DescribeTableReplicaAutoScaling",
+        "dynamodb:TagResource", "dynamodb:UntagResource", "dynamodb:ListTagsOfResource",
+        "dynamodb:GetResourcePolicy", "dynamodb:PutResourcePolicy", "dynamodb:DeleteResourcePolicy"
+      ],
+      "Resource": [
+        "arn:aws:dynamodb:*:<ACCOUNT_ID>:table/dynamodb-it-*",
+        "arn:aws:dynamodb:*:<ACCOUNT_ID>:table/dynamodb-it-*/index/*",
+        "arn:aws:dynamodb:*:<ACCOUNT_ID>:table/dynamodb-it-*/stream/*"
+      ]
+    },
+    {
+      "Sid": "ApplicationAutoScalingForTheTablesUnderTest",
+      "Effect": "Allow",
+      "Action": [
+        "application-autoscaling:RegisterScalableTarget", "application-autoscaling:DeregisterScalableTarget", "application-autoscaling:DescribeScalableTargets",
+        "application-autoscaling:PutScalingPolicy", "application-autoscaling:DeleteScalingPolicy", "application-autoscaling:DescribeScalingPolicies",
+        "application-autoscaling:TagResource", "application-autoscaling:UntagResource", "application-autoscaling:ListTagsForResource"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "ServiceLinkedRoleForDynamoDbAutoScaling",
+      "Effect": "Allow",
+      "Action": "iam:CreateServiceLinkedRole",
+      "Resource": "arn:aws:iam::<ACCOUNT_ID>:role/aws-service-role/dynamodb.application-autoscaling.amazonaws.com/AWSServiceRoleForApplicationAutoScaling_DynamoDBTable",
+      "Condition": {
+        "StringEquals": {
+          "iam:AWSServiceName": "dynamodb.application-autoscaling.amazonaws.com"
+        }
+      }
+    }
+  ]
+}
