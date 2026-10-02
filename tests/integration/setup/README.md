@@ -33,12 +33,14 @@ No modules.
 |------|------|
 | [random_id.suffix](https://registry.terraform.io/providers/hashicorp/random/latest/docs/resources/id) | resource |
 | [aws_caller_identity.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/caller_identity) | data source |
+| [aws_region.current](https://registry.terraform.io/providers/hashicorp/aws/latest/docs/data-sources/region) | data source |
 
 ## Inputs
 
 | Name | Description | Type | Default | Required |
 |------|-------------|------|---------|:--------:|
 | <a name="input_name_prefix"></a> [name\_prefix](#input\_name\_prefix) | Prefix for the table name; a random suffix is appended so concurrent runs never collide. | `string` | `"dynamodb-it"` | no |
+| <a name="input_replica_region"></a> [replica\_region](#input\_replica\_region) | Second region for the suites that create a global table replica, normally set through TF\_VAR\_replica\_region. Null for the single-region suites. | `string` | `null` | no |
 | <a name="input_tags"></a> [tags](#input\_tags) | Tags applied to the table under test in addition to the identifying defaults. | `map(string)` | `{}` | no |
 
 ## Outputs
@@ -48,5 +50,7 @@ No modules.
 | <a name="output_account_id"></a> [account\_id](#output\_account\_id) | Account the suite runs in, resolved from the caller's credentials. |
 | <a name="output_account_root_arn"></a> [account\_root\_arn](#output\_account\_root\_arn) | Root principal ARN of the account, granted read access by the resource policy under test. |
 | <a name="output_name"></a> [name](#output\_name) | Unique table name for the suite. |
+| <a name="output_region"></a> [region](#output\_region) | Region the table under test is created in, from the caller's environment. |
+| <a name="output_replica_region"></a> [replica\_region](#output\_replica\_region) | Second region for replica suites, or null when none was given. |
 | <a name="output_tags"></a> [tags](#output\_tags) | Identifying tags shared with the table under test. |
 <!-- END_TF_DOCS -->
