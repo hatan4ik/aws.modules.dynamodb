@@ -7,6 +7,13 @@ resource "aws_dynamodb_resource_policy" "this" {
 
   resource_arn = local.table.arn
   policy       = local.resource_policy
+
+  lifecycle {
+    precondition {
+      condition     = local.resource_policy_length_estimate <= local.resource_policy_max_length
+      error_message = "The rendered resource-based policy is about ${local.resource_policy_length_estimate} characters; DynamoDB accepts at most 20 KB (${local.resource_policy_max_length}). Merge statements, use wildcards in actions, or move grants to identity-based policies."
+    }
+  }
 }
 
 resource "aws_dynamodb_contributor_insights" "this" {

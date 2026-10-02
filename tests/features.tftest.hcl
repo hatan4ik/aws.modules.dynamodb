@@ -45,6 +45,19 @@ run "renders_ttl_stream_class_recovery_window_and_customer_key" {
   }
 }
 
+run "null_timeouts_keep_provider_defaults" {
+  command = plan
+
+  variables {
+    timeouts = null
+  }
+
+  assert {
+    condition     = aws_dynamodb_table.this[0].timeouts.create == null && aws_dynamodb_table.this[0].timeouts.update == null && aws_dynamodb_table.this[0].timeouts.delete == null
+    error_message = "timeouts = null must behave like the default {} and leave every provider default in place."
+  }
+}
+
 run "disables_ttl_without_an_attribute_name" {
   command = plan
 

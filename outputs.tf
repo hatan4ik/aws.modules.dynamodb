@@ -55,7 +55,7 @@ output "local_secondary_index_arns" {
 
 output "replica_arns" {
   description = "Replica table ARNs keyed by region; empty when no replicas are declared."
-  value       = { for replica in local.table.replica : replica.region_name => replica.arn }
+  value       = var.autoscaling == null ? { for replica in local.table.replica : replica.region_name => replica.arn } : { for region, replica in aws_dynamodb_table_replica.this : region => replica.arn }
 }
 
 output "autoscaling_target_resource_ids" {
