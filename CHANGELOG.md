@@ -6,6 +6,45 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
+Correctness release. Every change below makes configuration that was already wrong fail at plan time, or behave as documented. Some configurations that passed plan on 1.0.0 now fail plan, and some tables see an in-place tag change; check **Upgrade notes**. Proposed version: 1.1.0. The tag contract fix alone would be a patch, but autoscaled global tables now use a new resource address (`aws_dynamodb_table_replica.this`).
+
+### Fixed
+
+- **Provisioned global tables could never be created.** DynamoDB rejects a replica of a `PROVISIONED` table unless write capacity on the table and on every GSI is autoscaled ("write capacity should either be Pay-Per-Request or AutoScaled").
+  - The plan-time rule was too weak: it only required `autoscaling != null`. A table with `autoscaling = { table = { read = ... } }` and no write dimension, or a GSI without a write dimension, passed plan and failed at apply. A precondition now requires an `autoscaling` write dimension for the table and for every GSI whenever a `PROVISIONED` table has replicas, and names each table or index without one.
+  - Even a correct configuration failed on its first apply. The provider creates inline `replica` blocks inside the table's own create call, before `module.autoscaling` can register the scalable targets, which need the table to exist first. No `depends_on` can fix that order. Replicas of an autoscaled table are now separate `aws_dynamodb_table_replica.this["<region>"]` resources with `depends_on = [module.autoscaling]`. The `autoscaled` table variant renders no inline replicas and ignores `replica`. On-demand global tables are unchanged.
+- **A caller's `Name` tag was silently overwritten** with the table name: `merge(var.tags, { Name = var.name })` let the module win. This contradicted the documented contract ("never overrides caller tags"). Both table variants now use `merge({ Name = var.name }, var.tags)`, the pattern `aws.modules.s3` and `aws.modules.ksm` use. **Behavior change:** a caller who sets `tags.Name` will see the table's (and propagated replicas') `Name` tag change in place from the table name to their value on the next apply.
+- **Replica encryption symmetry was enforced in one direction only.** A table on the AWS owned key with a replica naming a customer managed key passed plan, giving a different encryption posture per region. The precondition now rejects that mismatch too and names the regions. **Behavior change:** such configurations, including ones already applied, now fail plan. Either give the table a customer managed key, or remove `kms_key_arn` from the replicas.
+
+### Added
+
+- Precondition on `aws_dynamodb_resource_policy.this`: the rendered document must fit DynamoDB's 20 KB resource-based policy limit. The size is estimated at plan time with the longest possible table ARN, so it never under-counts.
+- Advisory `check "autoscaled_index_drift"`: warns when `global_secondary_indexes` no longer matches the indexes on an existing autoscaled table. That variant ignores `global_secondary_index`, so a newly declared index never reaches the table, while its `autoscaling.indexes` targets and `contributor_insights_indexes` entries fail at apply.
+- Precondition rejecting `consistency_mode = "STRONG"` on an autoscaled table. Multi-Region strong consistency needs every replica in one request, which separate replica resources cannot make.
+- `variants` job in the `terraform-quality` workflow that runs `scripts/check-resource-variants.sh` on every pull request. Until now it ran only through `make check` and pre-commit.
+- Integration suite `global-provisioned-autoscaled` (`make integration-global-provisioned-autoscaled`, workflow choice of the same name). It creates a provisioned, autoscaled table with a GSI and a replica in a second region (`TF_VAR_replica_region`, environment variable `AWS_INTEGRATION_REPLICA_REGION`) in one apply. The fixture gains `region` and `replica_region` outputs, and the integration IAM policy gains the replica and replication service-linked role permissions.
+- Documentation of resource-policy `Deny` failure modes (self-lockout, denying the replication service-linked role) and of the policy size limit, plus a **Deferred items** list in `docs/DESIGN.md`.
+
+### Changed
+
+- `timeouts` defaults to `{}` and is non-nullable. Passing `null` still works and means the same thing: provider defaults (30m create, 60m update, 10m delete). The `timeouts` and `on_demand_throughput` descriptions now state what null means.
+- The resource policy is rendered from a template whose default `Resource` entries are filled in with the table ARN. The output is byte-identical to 1.0.0.
+- Version comments in `.github/workflows/integration.yml` now match the pinned SHAs (`actions/checkout` v7.0.1, `aws-actions/configure-aws-credentials` v6.3.0).
+
+### Upgrade notes
+
+- **Autoscaled global tables built before this release in two applies** (autoscaling first, replicas added later) keep their replicas in AWS, because the `autoscaled` variant now ignores `replica`. Before the first apply, import each replica into its new address, or the plan tries to create a replica that already exists and fails:
+
+  ```hcl
+  import {
+    to = module.orders.aws_dynamodb_table_replica.this["eu-west-1"]
+    id = "orders:us-east-1" # <table name>:<table region>
+  }
+  ```
+
+- Tables whose caller sets `tags.Name`: expect an in-place tag update.
+- Tables on the AWS owned key with a keyed replica: the plan fails until the posture is made symmetric.
+
 ## [1.0.0] - 2026-09-24
 
 Breaking release. One module call still provisions one table, but every feature a production table needs is now a typed input, every cross-input rule fails at plan time, and the interface is reshaped around feature groups. [docs/UPGRADE-1.0.md](docs/UPGRADE-1.0.md) maps every 0.1.x input to its replacement, lists the settings that keep the existing table, and gives ready-to-paste `moved` blocks.
