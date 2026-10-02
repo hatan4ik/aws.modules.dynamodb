@@ -17,3 +17,13 @@ output "tags" {
   description = "Identifying tags shared with the table under test."
   value       = local.tags
 }
+
+output "region" {
+  description = "Region the table under test is created in, from the caller's environment."
+  value       = data.aws_region.current.region
+}
+
+output "replica_region" {
+  description = "Second region for replica suites, or null when none was given."
+  value       = var.replica_region
+}

@@ -16,8 +16,9 @@ resolves with a random suffix so concurrent runs never collide.
 | --- | --- | --- | --- |
 | `smoke.tftest.hcl` | An on-demand table with a GSI, TTL, point-in-time recovery, a stream of new and old images, and a resource-based policy are accepted by the DynamoDB APIs, and every output reflects the real ARNs. | credentials, region | about 3 minutes |
 | `provisioned-autoscaled.tftest.hcl` | A PROVISIONED table and its GSI register four scalable targets and target-tracking policies with Application Auto Scaling through the `autoscaled` table variant. | credentials, region | about 4 minutes |
+| `global-provisioned-autoscaled.tftest.hcl` | A PROVISIONED, autoscaled table with a GSI gets a replica in a second region in **one** apply: the table is created, write autoscaling is registered on the table and the index, and only then is `aws_dynamodb_table_replica.this` created, which is the order DynamoDB requires. | credentials, region, `TF_VAR_replica_region` | about 15 minutes |
 
-Both suites set `deletion_protection_enabled = false` so `terraform test` can
+Every suite sets `deletion_protection_enabled = false` so `terraform test` can
 destroy the table, and expect the module's `deletion_protection_disabled`
 check to warn. Tables are billed for minutes; the smoke table is on-demand and
 the provisioned table runs at 2 read and 2 write units.
@@ -29,6 +30,7 @@ export AWS_PROFILE=<your profile>   # or AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_K
 export AWS_REGION=<region>
 make integration-smoke                   # terraform init -test-directory=tests/integration && terraform test -test-directory=tests/integration -filter=tests/integration/smoke.tftest.hcl
 make integration-provisioned-autoscaled
+TF_VAR_replica_region=<second region> make integration-global-provisioned-autoscaled
 ```
 
 The credentials need the permissions in
@@ -36,7 +38,10 @@ The credentials need the permissions in
 (replace `<ACCOUNT_ID>`). Table actions are scoped to names starting with
 `dynamodb-it-`, which is what the fixture produces; the service-linked role
 statement lets Application Auto Scaling create its DynamoDB role the first
-time it is used in the account.
+time it is used in the account, and the replication statement does the same
+for the DynamoDB global tables role. Replica creation also needs the item
+read and write actions on the table in every region, which the table
+statement grants under the same name scope.
 
 `terraform test` runs `tests/` only by default, so these suites never run in
 the credential-free quality pipeline. The fixture module is excluded from the
@@ -54,6 +59,7 @@ stays universal:
 | --- | --- |
 | `AWS_INTEGRATION_ROLE_ARN` | Role the workflow assumes. Trust policy: [`iam/github-oidc-trust-policy.json`](iam/github-oidc-trust-policy.json) with `<OWNER>/<REPO>` set to this repository; permissions: the policy above. |
 | `AWS_INTEGRATION_REGION` | Region for the disposable tables. |
+| `AWS_INTEGRATION_REPLICA_REGION` | Second region for the replica of the `global-provisioned-autoscaled` suite, passed as `TF_VAR_replica_region`. |
 
 Dispatch with `gh workflow run integration.yml -f suite=smoke` (or
 `provisioned-autoscaled`). Protect the environment with required reviewers so

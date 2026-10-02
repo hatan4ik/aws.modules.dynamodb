@@ -16,7 +16,9 @@
         "dynamodb:DescribeTimeToLive", "dynamodb:UpdateTimeToLive",
         "dynamodb:DescribeTableReplicaAutoScaling",
         "dynamodb:TagResource", "dynamodb:UntagResource", "dynamodb:ListTagsOfResource",
-        "dynamodb:GetResourcePolicy", "dynamodb:PutResourcePolicy", "dynamodb:DeleteResourcePolicy"
+        "dynamodb:GetResourcePolicy", "dynamodb:PutResourcePolicy", "dynamodb:DeleteResourcePolicy",
+        "dynamodb:CreateTableReplica", "dynamodb:DeleteTableReplica", "dynamodb:UpdateTableReplicaAutoScaling",
+        "dynamodb:Scan", "dynamodb:Query", "dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:UpdateItem", "dynamodb:DeleteItem", "dynamodb:BatchWriteItem"
       ],
       "Resource": [
         "arn:aws:dynamodb:*:<ACCOUNT_ID>:table/dynamodb-it-*",
@@ -32,6 +34,23 @@
         "application-autoscaling:PutScalingPolicy", "application-autoscaling:DeleteScalingPolicy", "application-autoscaling:DescribeScalingPolicies",
         "application-autoscaling:TagResource", "application-autoscaling:UntagResource", "application-autoscaling:ListTagsForResource"
       ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "ServiceLinkedRoleForDynamoDbReplication",
+      "Effect": "Allow",
+      "Action": "iam:CreateServiceLinkedRole",
+      "Resource": "arn:aws:iam::<ACCOUNT_ID>:role/aws-service-role/replication.dynamodb.amazonaws.com/AWSServiceRoleForDynamoDBReplication",
+      "Condition": {
+        "StringEquals": {
+          "iam:AWSServiceName": "replication.dynamodb.amazonaws.com"
+        }
+      }
+    },
+    {
+      "Sid": "RegionLookupForTheFixture",
+      "Effect": "Allow",
+      "Action": "ec2:DescribeRegions",
       "Resource": "*"
     },
     {

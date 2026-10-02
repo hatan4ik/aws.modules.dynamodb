@@ -52,6 +52,38 @@ run "table_is_on_demand_encrypted_recoverable_and_protected" {
   }
 }
 
+run "caller_name_tag_wins_over_the_module_default" {
+  command = plan
+
+  # Before 1.1.0 the module merged its Name tag over the caller's tags, so an
+  # explicit Name was silently replaced with the table name.
+  variables {
+    tags = { Name = "orders-primary", Owner = "platform" }
+  }
+
+  assert {
+    condition     = aws_dynamodb_table.this[0].tags == tomap({ Name = "orders-primary", Owner = "platform" })
+    error_message = "A caller-supplied Name tag must survive unchanged."
+  }
+}
+
+run "caller_name_tag_wins_on_the_autoscaled_variant_and_its_replicas" {
+  command = plan
+
+  variables {
+    tags         = { Name = "orders-primary", Owner = "platform" }
+    billing_mode = "PROVISIONED"
+    stream       = { view_type = "NEW_AND_OLD_IMAGES" }
+    autoscaling  = { table = { read = { min_capacity = 1, max_capacity = 10 }, write = { min_capacity = 1, max_capacity = 10 } } }
+    replicas     = { "eu-west-1" = {} }
+  }
+
+  assert {
+    condition     = aws_dynamodb_table.autoscaled[0].tags == tomap({ Name = "orders-primary", Owner = "platform" }) && aws_dynamodb_table_replica.this["eu-west-1"].tags == tomap({ Name = "orders-primary", Owner = "platform" })
+    error_message = "A caller-supplied Name tag must survive on the autoscaled variant and on its replicas."
+  }
+}
+
 run "outputs_expose_configured_identity" {
   command = plan
 

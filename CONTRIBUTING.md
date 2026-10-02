@@ -61,7 +61,7 @@ Every behaviour in this module is pinned by a test before it is implemented. Wri
 - Assertions must not depend on unknown values. With a mock provider, computed attributes such as ARNs, stream labels, and optional-computed attributes left null (GSI capacities on an on-demand table, `stream_view_type` without a stream) are unknown at plan time. A set that contains an unknown element has an unknown length, so count `global_secondary_index` and `replica` entries with `length([for index in ... : index.name])` and read their attributes with `one([for ... if ...])`, as `tests/indexes.tftest.hcl` and `tests/replicas.tftest.hcl` do.
 - `||` and `&&` do not short-circuit in Terraform 1.7. Both operands are always evaluated, so `var.x == null || var.x.field > 0` fails when `x` is null. Guard with a conditional instead: `var.x == null ? true : var.x.field > 0`. This applies to validations, preconditions, and test assertions alike.
 - Keep assertion `error_message` text a statement of the guaranteed behaviour. It becomes the documentation of the contract when a test fails.
-- The two `aws_dynamodb_table` resource blocks in `table.tf` must stay identical apart from `count` and `lifecycle.ignore_changes`. A change to one is a change to both; `make variants` enforces it and `tests/autoscaling.tftest.hcl` covers the `autoscaled` variant.
+- The two `aws_dynamodb_table` resource blocks in `table.tf` must stay identical apart from `count` and `lifecycle.ignore_changes`. A change to one is a change to both; `make variants`, pre-commit, and the `variants` job of the `terraform-quality` workflow enforce it, and `tests/autoscaling.tftest.hcl` covers the `autoscaled` variant.
 
 ## Where to add a feature
 

@@ -72,3 +72,61 @@ run "scales_indexes_and_keeps_explicit_capacities" {
     error_message = "Index dimensions must be exposed with their index resource ID."
   }
 }
+
+run "create_autoscaled_table_with_one_index" {
+  command = apply
+
+  variables {
+    attributes = { pk = "S", sk = "S", status = "S" }
+    global_secondary_indexes = {
+      by_status = { hash_key = "status", projection_type = "KEYS_ONLY" }
+    }
+    autoscaling = {
+      table   = { read = { min_capacity = 1, max_capacity = 10 }, write = { min_capacity = 1, max_capacity = 10 } }
+      indexes = { by_status = { read = { min_capacity = 1, max_capacity = 10 }, write = { min_capacity = 1, max_capacity = 10 } } }
+    }
+  }
+}
+
+run "warns_when_an_index_is_added_to_an_existing_autoscaled_table" {
+  command = plan
+
+  # The autoscaled variant ignores global_secondary_index, so the new index
+  # never reaches the table while its scalable targets would still be planned.
+  variables {
+    attributes = { pk = "S", sk = "S", status = "S", region = "S" }
+    global_secondary_indexes = {
+      by_status = { hash_key = "status", projection_type = "KEYS_ONLY" }
+      by_region = { hash_key = "region", projection_type = "KEYS_ONLY" }
+    }
+    autoscaling = {
+      table = { read = { min_capacity = 1, max_capacity = 10 }, write = { min_capacity = 1, max_capacity = 10 } }
+      indexes = {
+        by_status = { read = { min_capacity = 1, max_capacity = 10 }, write = { min_capacity = 1, max_capacity = 10 } }
+        by_region = { read = { min_capacity = 1, max_capacity = 10 }, write = { min_capacity = 1, max_capacity = 10 } }
+      }
+    }
+  }
+
+  expect_failures = [check.autoscaled_index_drift]
+}
+
+run "does_not_warn_when_the_autoscaled_indexes_are_unchanged" {
+  command = plan
+
+  variables {
+    attributes = { pk = "S", sk = "S", status = "S" }
+    global_secondary_indexes = {
+      by_status = { hash_key = "status", projection_type = "KEYS_ONLY" }
+    }
+    autoscaling = {
+      table   = { read = { min_capacity = 1, max_capacity = 10 }, write = { min_capacity = 1, max_capacity = 10 } }
+      indexes = { by_status = { read = { min_capacity = 1, max_capacity = 10 }, write = { min_capacity = 1, max_capacity = 10 } } }
+    }
+  }
+
+  assert {
+    condition     = sort([for index in aws_dynamodb_table.autoscaled[0].global_secondary_index : index.name]) == tolist(["by_status"])
+    error_message = "The planned index set must match the declared indexes."
+  }
+}

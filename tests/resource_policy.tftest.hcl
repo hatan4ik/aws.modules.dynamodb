@@ -80,3 +80,43 @@ run "defaults_resources_to_the_table_and_its_indexes" {
     error_message = "A statement without resources must cover the table and every index."
   }
 }
+
+run "rejects_a_policy_over_the_20_kb_limit" {
+  command = plan
+
+  # 60 statements of 10 long principal ARNs render to well over 20480
+  # characters; DynamoDB would reject the document at apply.
+  variables {
+    resource_policy_statements = {
+      for i in range(60) : "Grant${i}" => {
+        principals = { AWS = [for j in range(10) : format("arn:aws:iam::123456789012:role/a-deliberately-long-role-name-for-size-testing-%02d-%02d", i, j)] }
+        actions    = ["dynamodb:GetItem"]
+      }
+    }
+  }
+
+  expect_failures = [aws_dynamodb_resource_policy.this]
+}
+
+run "accepts_a_policy_under_the_limit_and_estimates_it_at_plan" {
+  command = apply
+
+  variables {
+    resource_policy_statements = {
+      for i in range(5) : "Grant${i}" => {
+        principals = { AWS = [for j in range(10) : format("arn:aws:iam::123456789012:role/a-deliberately-long-role-name-for-size-testing-%02d-%02d", i, j)] }
+        actions    = ["dynamodb:GetItem"]
+      }
+    }
+  }
+
+  assert {
+    condition     = length(aws_dynamodb_resource_policy.this) == 1 && length(output.resource_policy) < 20480
+    error_message = "A policy under the limit must be created."
+  }
+
+  assert {
+    condition     = strcontains(output.resource_policy, "\"arn:aws:dynamodb:us-east-1:123456789012:table/orders\"") && !strcontains(output.resource_policy, "MODULE_TABLE_ARN_PLACEHOLDER")
+    error_message = "The default Resource list must name the real table ARN, never the template token."
+  }
+}

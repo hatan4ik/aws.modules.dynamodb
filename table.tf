@@ -6,7 +6,11 @@
 # The autoscaled variant ignores read_capacity, write_capacity, and
 # global_secondary_index: Application Auto Scaling owns the capacities after
 # creation, and global_secondary_index is a set, so its capacities cannot be
-# ignored individually.
+# ignored individually. It also ignores replica: an autoscaled table renders no
+# inline replicas (local.inline_replicas is empty) because DynamoDB only accepts
+# a replica of a PROVISIONED table once write autoscaling is registered, which
+# needs the table to exist first. Its replicas are aws_dynamodb_table_replica.this
+# at the end of this file, created after modules/autoscaling.
 #
 # checkov:skip=CKV_AWS_119 is applied inline on both variants: encryption at
 # rest is always enabled and the AWS owned key is the deliberate default when
@@ -81,7 +85,7 @@ resource "aws_dynamodb_table" "this" {
   }
 
   dynamic "replica" {
-    for_each = var.replicas
+    for_each = local.inline_replicas
 
     content {
       region_name                 = replica.key
@@ -116,12 +120,12 @@ resource "aws_dynamodb_table" "this" {
   }
 
   timeouts {
-    create = try(var.timeouts.create, null)
-    update = try(var.timeouts.update, null)
-    delete = try(var.timeouts.delete, null)
+    create = var.timeouts.create
+    update = var.timeouts.update
+    delete = var.timeouts.delete
   }
 
-  tags = merge(var.tags, { Name = var.name })
+  tags = merge({ Name = var.name }, var.tags)
 
   lifecycle {
     precondition {
@@ -200,13 +204,18 @@ resource "aws_dynamodb_table" "this" {
     }
 
     precondition {
-      condition     = length(var.replicas) == 0 || !local.provisioned || var.autoscaling != null
-      error_message = "replicas require billing_mode = \"PAY_PER_REQUEST\" or autoscaling on a PROVISIONED table, so every region can absorb replicated writes."
+      condition     = length(local.replicated_writes_not_autoscaled) == 0
+      error_message = "replicas of a PROVISIONED table require write autoscaling on the table and on every GSI; DynamoDB rejects the replica otherwise (\"write capacity should either be Pay-Per-Request or AutoScaled\"). Add an autoscaling write dimension for: ${join(", ", local.replicated_writes_not_autoscaled)}, or use billing_mode = \"PAY_PER_REQUEST\"."
     }
 
     precondition {
-      condition     = var.server_side_encryption.kms_key_arn == null || length(local.replicas_without_key) == 0
-      error_message = "The table uses a customer managed key, so every replica must name its own regional kms_key_arn. Missing in: ${join(", ", local.replicas_without_key)}."
+      condition     = length(local.replicas_with_mismatched_encryption) == 0
+      error_message = var.server_side_encryption.kms_key_arn == null ? "The table uses the AWS owned key, so no replica may name a kms_key_arn; the encryption posture must be the same in every region. Set server_side_encryption.kms_key_arn on the table or remove the key from: ${join(", ", local.replicas_with_mismatched_encryption)}." : "The table uses a customer managed key, so every replica must name its own regional kms_key_arn. Missing in: ${join(", ", local.replicas_with_mismatched_encryption)}."
+    }
+
+    precondition {
+      condition     = var.autoscaling == null || length(local.strongly_consistent_replicas) == 0
+      error_message = "consistency_mode = \"STRONG\" is not supported on an autoscaled PROVISIONED table: its replicas are created one at a time after autoscaling is registered, and multi-Region strong consistency needs every replica in one request. Use PAY_PER_REQUEST for: ${join(", ", local.strongly_consistent_replicas)}."
     }
   }
 }
@@ -280,7 +289,7 @@ resource "aws_dynamodb_table" "autoscaled" {
   }
 
   dynamic "replica" {
-    for_each = var.replicas
+    for_each = local.inline_replicas
 
     content {
       region_name                 = replica.key
@@ -315,12 +324,12 @@ resource "aws_dynamodb_table" "autoscaled" {
   }
 
   timeouts {
-    create = try(var.timeouts.create, null)
-    update = try(var.timeouts.update, null)
-    delete = try(var.timeouts.delete, null)
+    create = var.timeouts.create
+    update = var.timeouts.update
+    delete = var.timeouts.delete
   }
 
-  tags = merge(var.tags, { Name = var.name })
+  tags = merge({ Name = var.name }, var.tags)
 
   lifecycle {
     precondition {
@@ -399,14 +408,40 @@ resource "aws_dynamodb_table" "autoscaled" {
     }
 
     precondition {
-      condition     = length(var.replicas) == 0 || !local.provisioned || var.autoscaling != null
-      error_message = "replicas require billing_mode = \"PAY_PER_REQUEST\" or autoscaling on a PROVISIONED table, so every region can absorb replicated writes."
+      condition     = length(local.replicated_writes_not_autoscaled) == 0
+      error_message = "replicas of a PROVISIONED table require write autoscaling on the table and on every GSI; DynamoDB rejects the replica otherwise (\"write capacity should either be Pay-Per-Request or AutoScaled\"). Add an autoscaling write dimension for: ${join(", ", local.replicated_writes_not_autoscaled)}, or use billing_mode = \"PAY_PER_REQUEST\"."
     }
 
     precondition {
-      condition     = var.server_side_encryption.kms_key_arn == null || length(local.replicas_without_key) == 0
-      error_message = "The table uses a customer managed key, so every replica must name its own regional kms_key_arn. Missing in: ${join(", ", local.replicas_without_key)}."
+      condition     = length(local.replicas_with_mismatched_encryption) == 0
+      error_message = var.server_side_encryption.kms_key_arn == null ? "The table uses the AWS owned key, so no replica may name a kms_key_arn; the encryption posture must be the same in every region. Set server_side_encryption.kms_key_arn on the table or remove the key from: ${join(", ", local.replicas_with_mismatched_encryption)}." : "The table uses a customer managed key, so every replica must name its own regional kms_key_arn. Missing in: ${join(", ", local.replicas_with_mismatched_encryption)}."
     }
-    ignore_changes = [read_capacity, write_capacity, global_secondary_index]
+
+    precondition {
+      condition     = var.autoscaling == null || length(local.strongly_consistent_replicas) == 0
+      error_message = "consistency_mode = \"STRONG\" is not supported on an autoscaled PROVISIONED table: its replicas are created one at a time after autoscaling is registered, and multi-Region strong consistency needs every replica in one request. Use PAY_PER_REQUEST for: ${join(", ", local.strongly_consistent_replicas)}."
+    }
+    ignore_changes = [read_capacity, write_capacity, global_secondary_index, replica]
   }
+}
+
+# Replicas of an autoscaled table. aws_dynamodb_table's own create adds inline
+# replicas before any other resource can run, so on a PROVISIONED table the
+# replica request would reach DynamoDB before modules/autoscaling registers the
+# write scalable targets and fail with "write capacity should either be
+# Pay-Per-Request or AutoScaled", on every apply. Separate replica resources
+# that depend on the autoscaling module put the calls in the order DynamoDB
+# requires: table, scalable targets and policies, then replicas. On-demand
+# tables keep their replicas inline (local.separate_replicas is empty).
+resource "aws_dynamodb_table_replica" "this" {
+  for_each = local.separate_replicas
+
+  region                      = each.key
+  global_table_arn            = local.table.arn
+  kms_key_arn                 = each.value.kms_key_arn
+  point_in_time_recovery      = each.value.point_in_time_recovery == null ? var.point_in_time_recovery.enabled : each.value.point_in_time_recovery
+  deletion_protection_enabled = each.value.deletion_protection_enabled == null ? var.deletion_protection_enabled : each.value.deletion_protection_enabled
+  tags                        = each.value.propagate_tags ? merge({ Name = var.name }, var.tags) : null
+
+  depends_on = [module.autoscaling]
 }
