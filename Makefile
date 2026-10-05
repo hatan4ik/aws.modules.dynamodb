@@ -15,7 +15,7 @@ TFDOCS_CONFIG := $(CURDIR)/.terraform-docs.yml
 # docs drift check in CI.
 TFDOCS_VERSION := v0.20.0
 
-.PHONY: check fmt fmt-fix init validate lint test variants docs-version docs docs-check security lock integration-smoke integration-provisioned-autoscaled clean
+.PHONY: integration-require-replica-region check fmt fmt-fix init validate lint test variants docs-version docs docs-check security lock integration-smoke integration-provisioned-autoscaled integration-global-provisioned-autoscaled clean
 
 check: fmt validate lint test variants docs-check security
 
@@ -86,7 +86,12 @@ security:
 # Integration suites apply the module for real in the caller's own account and
 # destroy everything afterwards. Credentials and region come from the
 # environment; see tests/integration/README.md.
-integration-smoke integration-provisioned-autoscaled: integration-%:
+integration-global-provisioned-autoscaled: integration-%: integration-require-replica-region
+
+integration-require-replica-region:
+	@[ -n "$$TF_VAR_replica_region" ] || { echo "error: set TF_VAR_replica_region to a second region for the replica" >&2; exit 1; }
+
+integration-smoke integration-provisioned-autoscaled integration-global-provisioned-autoscaled: integration-%:
 	@[ -n "$$AWS_REGION$$AWS_DEFAULT_REGION" ] || { echo "error: set AWS_REGION (and credentials) for the account that will host the disposable table" >&2; exit 1; }
 	@echo "==> integration $* (real apply in $${AWS_REGION:-$$AWS_DEFAULT_REGION})"
 	@terraform init -backend=false -input=false -test-directory=tests/integration >/dev/null

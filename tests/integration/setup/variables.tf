@@ -14,3 +14,14 @@ variable "tags" {
   type        = map(string)
   default     = {}
 }
+
+variable "replica_region" {
+  description = "Second region for the suites that create a global table replica, normally set through TF_VAR_replica_region. Null for the single-region suites."
+  type        = string
+  default     = null
+
+  validation {
+    condition     = var.replica_region == null ? true : can(regex("^[a-z]{2,4}(-[a-z]+)+-[0-9]+$", var.replica_region))
+    error_message = "replica_region must be an AWS region name such as eu-west-1."
+  }
+}

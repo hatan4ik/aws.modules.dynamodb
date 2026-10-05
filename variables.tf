@@ -14,7 +14,7 @@ variable "name" {
 }
 
 variable "tags" {
-  description = "Tags applied to the table, propagated to replicas by default, and applied to autoscaling targets. The module adds a Name tag and never overrides caller tags."
+  description = "Tags applied to the table, propagated to replicas by default, and applied to autoscaling targets. The module adds a Name tag set to name unless the caller supplies its own Name, and never overrides caller tags."
   type        = map(string)
   default     = {}
   nullable    = false
@@ -91,7 +91,7 @@ variable "write_capacity" {
 }
 
 variable "on_demand_throughput" {
-  description = "Maximum read and write request units per second of an on-demand table. Each limit is at least 1, or -1 to remove a limit set earlier. Only valid with PAY_PER_REQUEST."
+  description = "Maximum read and write request units per second of an on-demand table. Each limit is at least 1, or -1 to remove a limit set earlier. Null (the default), or a null limit inside the object, leaves that dimension uncapped: the table scales up to the account's per-table quotas. Only valid with PAY_PER_REQUEST."
   type = object({
     max_read_request_units  = optional(number)
     max_write_request_units = optional(number)
@@ -460,11 +460,12 @@ variable "contributor_insights_indexes" {
 # ---------------------------------------------------------------------------
 
 variable "timeouts" {
-  description = "Create, update, and delete timeouts for the table, as duration strings."
+  description = "Create, update, and delete timeouts for the table, as duration strings such as \"60m\". An omitted or null field, and the default {}, keep the AWS provider's default for that operation (30m create, 60m update, 10m delete); passing null for the whole object is the same as {}."
   type = object({
     create = optional(string)
     update = optional(string)
     delete = optional(string)
   })
-  default = null
+  default  = {}
+  nullable = false
 }

@@ -47,9 +47,36 @@ locals {
     )]),
   ))
 
-  undeclared_autoscaled_indexes   = sort(setsubtract(toset(keys(local.autoscaled_indexes)), toset(keys(var.global_secondary_indexes))))
-  undeclared_insights_indexes     = sort(setsubtract(var.contributor_insights_indexes, toset(keys(var.global_secondary_indexes))))
-  replicas_without_key            = sort([for region, replica in var.replicas : region if replica.kms_key_arn == null])
+  undeclared_autoscaled_indexes = sort(setsubtract(toset(keys(local.autoscaled_indexes)), toset(keys(var.global_secondary_indexes))))
+  undeclared_insights_indexes   = sort(setsubtract(var.contributor_insights_indexes, toset(keys(var.global_secondary_indexes))))
+
+  # DynamoDB rejects a replica of a PROVISIONED table unless write capacity is
+  # autoscaled on the table and on every GSI ("write capacity should either be
+  # Pay-Per-Request or AutoScaled"). Read capacity may stay fixed.
+  replicated_writes_not_autoscaled = !local.provisioned || length(var.replicas) == 0 ? [] : concat(
+    local.autoscaled_table_write == null ? ["table"] : [],
+    sort([for name in keys(var.global_secondary_indexes) : "index ${name}" if try(local.autoscaled_indexes[name].write, null) == null]),
+  )
+
+  # Replicas of an on-demand table are rendered inline on the table. Replicas
+  # of an autoscaled (PROVISIONED) table are separate aws_dynamodb_table_replica
+  # resources created after modules/autoscaling: DynamoDB only accepts them once
+  # write autoscaling is registered, and the scalable targets can only be
+  # registered once the table exists. Both table variants render
+  # local.inline_replicas so their bodies stay identical.
+  inline_replicas   = var.autoscaling == null ? var.replicas : {}
+  separate_replicas = var.autoscaling == null ? {} : var.replicas
+
+  # Encryption posture must be the same in every region: either the table and
+  # every replica use customer managed keys, or none of them does.
+  replicas_without_key                = sort([for region, replica in var.replicas : region if replica.kms_key_arn == null])
+  replicas_with_key                   = sort([for region, replica in var.replicas : region if replica.kms_key_arn != null])
+  replicas_with_mismatched_encryption = var.server_side_encryption.kms_key_arn == null ? local.replicas_with_key : local.replicas_without_key
+
+  # Multi-Region strong consistency creates every replica in one UpdateTable
+  # call, which separate replica resources cannot express.
+  strongly_consistent_replicas = sort([for region, replica in var.replicas : region if replica.consistency_mode == "STRONG"])
+
   on_demand_gsis_with_capacity    = sort([for name, index in var.global_secondary_indexes : name if index.read_capacity != null || index.write_capacity != null])
   provisioned_gsis_with_on_demand = sort([for name, index in var.global_secondary_indexes : name if index.on_demand_throughput != null])
 
@@ -59,6 +86,13 @@ locals {
   # Resource-based policy: statements sorted by Sid, principals, actions,
   # resources, and condition values sorted, no null or empty keys, so the
   # rendered JSON only changes when a statement actually changes.
+  #
+  # The document is rendered once as a template whose default Resource list
+  # names a placeholder token, then the token is replaced with the table ARN.
+  # Table ARNs contain no character jsonencode escapes, so the result is
+  # byte-identical to rendering the ARN directly, and the same template yields
+  # a size estimate that is known at plan time, before the table exists.
+  resource_policy_arn_token = "MODULE_TABLE_ARN_PLACEHOLDER"
   resource_policy_statements = [
     for sid in sort(keys(var.resource_policy_statements)) : merge(
       {
@@ -66,7 +100,7 @@ locals {
         Effect    = var.resource_policy_statements[sid].effect
         Principal = { for type in sort(keys(var.resource_policy_statements[sid].principals)) : type => sort(tolist(var.resource_policy_statements[sid].principals[type])) }
         Action    = sort(tolist(var.resource_policy_statements[sid].actions))
-        Resource  = var.resource_policy_statements[sid].resources == null ? [local.table.arn, "${local.table.arn}/index/*"] : sort(tolist(var.resource_policy_statements[sid].resources))
+        Resource  = var.resource_policy_statements[sid].resources == null ? [local.resource_policy_arn_token, "${local.resource_policy_arn_token}/index/*"] : sort(tolist(var.resource_policy_statements[sid].resources))
       },
       length(var.resource_policy_statements[sid].conditions) == 0 ? {} : {
         Condition = {
@@ -77,8 +111,21 @@ locals {
       },
     )
   ]
-  resource_policy = length(var.resource_policy_statements) == 0 ? null : jsonencode({
+  resource_policy_template = length(var.resource_policy_statements) == 0 ? null : jsonencode({
     Version   = "2012-10-17"
     Statement = local.resource_policy_statements
   })
+  # Only a document that uses the default Resource list depends on the table
+  # ARN; one whose statements all name their resources stays known at plan.
+  resource_policy = local.resource_policy_template == null ? null : (strcontains(local.resource_policy_template, local.resource_policy_arn_token) ? replace(local.resource_policy_template, local.resource_policy_arn_token, local.table.arn) : local.resource_policy_template)
+
+  # DynamoDB caps a resource-based policy document at 20 KB and counts
+  # whitespace (PutResourcePolicy; Developer Guide, "Resource-based policy
+  # considerations"). jsonencode emits no whitespace. The estimate substitutes
+  # the longest ARN prefix any partition and region can produce
+  # (arn:aws-iso-b:dynamodb:ap-southeast-5:123456789012:table/, 57 characters)
+  # followed by the table name, so it never under-counts the real document.
+  resource_policy_max_length      = 20480
+  resource_policy_arn_upper_bound = "${join("", [for i in range(57) : "x"])}${var.name}"
+  resource_policy_length_estimate = local.resource_policy_template == null ? 0 : length(replace(local.resource_policy_template, local.resource_policy_arn_token, local.resource_policy_arn_upper_bound))
 }

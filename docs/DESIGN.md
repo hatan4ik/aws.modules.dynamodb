@@ -63,6 +63,7 @@ consumes their identifiers and exposes its own.
 root (one table)
 ├── aws_dynamodb_table.this | .autoscaled     the table; the second variant ignores capacity drift
 ├── modules/autoscaling                      targets and target-tracking policies per scaled dimension
+├── aws_dynamodb_table_replica.this          replicas of an autoscaled table, after modules/autoscaling
 ├── aws_dynamodb_resource_policy.this        optional, rendered from resource_policy_statements
 ├── aws_dynamodb_contributor_insights.this   optional, table-level
 ├── aws_dynamodb_contributor_insights.index  optional, one per named GSI
@@ -85,7 +86,7 @@ declared twice with identical bodies:
 
 - `aws_dynamodb_table.this[0]` is created when `autoscaling` is `null`.
 - `aws_dynamodb_table.autoscaled[0]` is created when `autoscaling` is set. It
-  adds `ignore_changes = [read_capacity, write_capacity, global_secondary_index]`
+  adds `ignore_changes = [read_capacity, write_capacity, global_secondary_index, replica]`
   so the capacity values Application Auto Scaling writes do not show as drift.
   `global_secondary_index` is a set, so per-attribute ignores inside it are not
   possible; the whole block is ignored, which means index changes on an
@@ -96,8 +97,35 @@ The initial capacity of an autoscaled dimension is its explicit
 `read_capacity`/`write_capacity` when given, otherwise the dimension's
 `min_capacity`; the scaler owns the value from then on.
 
-`scripts/check-resource-variants.sh` fails `make check` and the pre-commit
-hook when the two bodies drift apart in anything other than `count` and
+### Replicas of a provisioned table
+
+DynamoDB rejects a replica of a `PROVISIONED` table ("write capacity should
+either be Pay-Per-Request or AutoScaled") unless write capacity on the table
+and on every GSI is already registered with Application Auto Scaling. The
+provider creates inline `replica` blocks inside the table's own create, before
+any other resource runs, and the scalable targets need the table to exist, so
+no `depends_on` can order inline replicas after autoscaling: a provisioned
+global table with inline replicas fails on every first apply. The module
+therefore:
+
+- requires, by precondition, a write dimension in `autoscaling` for the table
+  and every GSI whenever a `PROVISIONED` table has replicas;
+- renders `local.inline_replicas` on both variants: `var.replicas` on `this`,
+  empty on `autoscaled` (the bodies stay textually identical);
+- creates the replicas of an autoscaled table as
+  `aws_dynamodb_table_replica.this`, keyed by region, with the provider's
+  `region` argument and `depends_on = [module.autoscaling]`, so the order is
+  table, scalable targets and policies, replicas, and the reverse on destroy;
+- ignores `replica` on the `autoscaled` variant so replicas created by the
+  separate resources, or inline before 1.1.0, are never removed from it;
+- rejects `consistency_mode = "STRONG"` on an autoscaled table, because
+  multi-Region strong consistency creates every replica in one request.
+
+On-demand global tables keep inline replicas; their addresses are unchanged.
+
+`scripts/check-resource-variants.sh` fails `make check`, the pre-commit
+hook, and the `variants` job of the `terraform-quality` workflow (every pull
+request) when the two bodies drift apart in anything other than `count` and
 `ignore_changes`. Toggling `autoscaling` between `null` and an object changes
 the resource address; `docs/UPGRADE-1.0.md` gives the `moved` block.
 
@@ -170,9 +198,21 @@ Preconditions on the table (two variables interact):
   (table or GSI) requires `PAY_PER_REQUEST`.
 - `autoscaling.indexes` and `contributor_insights_indexes` name declared GSIs.
 - `replicas` requires `stream.view_type = "NEW_AND_OLD_IMAGES"` and either
-  `PAY_PER_REQUEST` or `autoscaling`.
-- When the table uses a customer managed key, every replica names its own
-  regional key, so the encryption posture is the same in every region.
+  `PAY_PER_REQUEST` or, on a `PROVISIONED` table, an `autoscaling` write
+  dimension for the table and for every GSI; the error names each table or
+  index without one.
+- The encryption posture is the same in every region, in both directions:
+  when the table uses a customer managed key every replica names its own
+  regional key, and when the table uses the AWS owned key no replica names
+  one.
+- `consistency_mode = "STRONG"` is rejected on an autoscaled table.
+
+Precondition on the resource policy:
+
+- The rendered document fits DynamoDB's 20 KB resource-based policy limit.
+  The estimate is known at plan time: the default `Resource` list is counted
+  with the longest ARN prefix any partition and region produces
+  (57 characters) plus the table name, so it never under-counts.
 
 ### Lifecycle rules
 
@@ -183,9 +223,12 @@ Preconditions on the table (two variables interact):
   but renders the block disabled without a name, as the provider requires.
 - Replicas inherit the table's deletion protection and point-in-time recovery
   settings unless overridden per region, and propagate tags by default.
-- Two `check` blocks warn without blocking: `deletion_protection_disabled` and
-  `point_in_time_recovery_disabled`.
-- Timeouts are passed through unchanged.
+- Three `check` blocks warn without blocking: `deletion_protection_disabled`,
+  `point_in_time_recovery_disabled`, and `autoscaled_index_drift` (the
+  declared GSIs no longer match the indexes on an existing autoscaled table,
+  whose variant ignores `global_secondary_index`).
+- Timeouts are passed through unchanged; `{}` (the default) and `null` keep
+  the provider defaults.
 
 ## Security defaults
 
@@ -196,7 +239,11 @@ Preconditions on the table (two variables interact):
   meaningful.
 - Replicas inherit the table's deletion protection and point-in-time recovery
   settings unless overridden per region, and propagate tags by default.
-- The module adds only a `Name` tag and never overrides caller tags.
+- The module adds only a `Name` tag and never overrides caller tags: the
+  caller's `Name`, when given, wins (`merge({ Name = name }, tags)`).
+- `Deny` statements in the resource policy are not checked against the
+  principals they lock out; README, Security model, documents the failure
+  modes (self-lockout, denying the replication service-linked role).
 
 ## Testing strategy
 
@@ -231,6 +278,22 @@ Preconditions on the table (two variables interact):
   `global_table_witness`, Contributor Insights `mode`, and a table variant
   that autoscales without ignoring `global_secondary_index`. They are roadmap
   items and will be added as optional inputs without breaking this interface.
+
+## Deferred items
+
+Recorded for a future major or minor release; none is a defect in v1.
+
+- `modules/autoscaling` is a real submodule with one consumer, the root. It
+  does not clear the "two concrete uses" bar for extraction, but its resource
+  addresses (`module.autoscaling[0].aws_appautoscaling_target.this[...]`) are
+  part of the released v1 contract, so it stays. v2 consideration: fold it
+  back into `autoscaling.tf` with `moved` blocks, or keep it if a second
+  consumer appears.
+- A table variant that autoscales without ignoring `global_secondary_index`
+  (see Compatibility). Until then the `autoscaled_index_drift` check warns
+  when the declared indexes and the table diverge.
+- Replica-level overrides that the separate replica resource supports but the
+  `replicas` input does not expose yet (`table_class_override`).
 
 ## Migration
 
